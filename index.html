@@ -128,6 +128,8 @@ input.num{width:84px;font-family:var(--mono);text-align:right}
         <option value="syncdrivedc">Synchrone moteur → MCC génératrice</option>
         <option value="foccurrent">MS à aimants : commande FOC en courant</option>
         <option value="focspeed">MS à aimants : commande FOC en vitesse</option>
+        <option value="asmstart">Asynchrone à cage : démarrage direct</option>
+        <option value="asminverter">Asynchrone à cage : onduleur MLI</option>
       </select></div>
     <div class="grp"><button class="btn" id="save" title="Enregistrer le circuit dans un fichier">Enregistrer</button><button class="btn" id="open" title="Ouvrir un fichier de circuit">Ouvrir…</button><input type="file" id="file" accept=".json,application/json" hidden></div>
     <div class="grp"><button class="btn" id="layout" title="Placer le schéma et les oscilloscopes côte à côte ou l’un sous l’autre">Côte à côte</button><button class="btn" id="addscope" title="Ajouter une fenêtre d’oscilloscope">+ Oscillo</button><label class="lbl" style="display:flex;align-items:center;gap:4px" title="Synchroniser la plage de temps de tous les oscilloscopes"><input type="checkbox" id="linkx" checked>Axes liés</label></div>
@@ -166,6 +168,7 @@ const DEFAULTS={
   MWF:{Ra:1,La:10e-3,Rf:10,Lf:100e-3,K:0.1,J:0.01,B:0.001,Tload:0,ia0:0,if0:0,w0:0,theta0:0,layout:1},
   SPM:{phases:3,connection:'star',Rs:1,Ls:0.1,flux:0.2,poles:2,J:0.01,B:0.001,Tload:0,w0:0,theta0:0},
   SWF:{phases:3,connection:'star',Rs:1,Ls:0.1,Rf:10,Lf:2,M:0.1,poles:2,J:0.01,B:0.001,Tload:0,if0:0,w0:0,theta0:0},
+  ASM:{connection:'star',Rs:1,Rr:0.8,Lls:0.005,Llr:0.005,Lm:0.08,poles:2,J:0.02,B:0.001,Tload:0,w0:0,theta0:0},
   MLOAD:{J:0.01,B:0.001,Tload:0.1,w0:0,theta0:0},
   SHAFT:{motor1:0,motor2:0,ratio:1,load:0},
   MSPEED:{motor:0}, MTORQUE:{motor:0}, MPOS:{motor:0},
@@ -175,7 +178,7 @@ const DEFAULTS={
   SUM:{s1:1,s2:-1}, GAIN:{K:1}, PI:{Kp:0.01,Ki:20,min:0,max:1,i0:0}, SV:{K:1}, SI:{K:1,Rs:1e-3},
   SW:{mode:'pwm',fsw:20000,duty:0.5,m:0.8,fref:50,ph:0,inv:0,body:1,Ron:0.01,Vf:0.7}
 };
-const PREFIX={R:'R',L:'L',C:'C',Vdc:'V',Vac:'E',D:'D',SW:'S',SCR:'T',Idc:'I',Iac:'Ia',XF:'TR',MPM:'M',MWF:'M',SPM:'MS',SWF:'MS',MLOAD:'Charge',SHAFT:'Arbre',MSPEED:'Vit',MTORQUE:'Couple',MPOS:'Pos',SIN:'Ref',CST:'Cst',TRI:'Tri',CMP:'Cmp',SUM:'Sum',GAIN:'Gn',PI:'PI',SV:'Cv',SI:'Ci',TRIGSIN:'Sin',TRIGCOS:'Cos',CLARKE:'Clarke',ICLARKE:'ClarkeInv',PARK:'Park',IPARK:'ParkInv',gnd:'GND'};
+const PREFIX={R:'R',L:'L',C:'C',Vdc:'V',Vac:'E',D:'D',SW:'S',SCR:'T',Idc:'I',Iac:'Ia',XF:'TR',MPM:'M',MWF:'M',SPM:'MS',SWF:'MS',ASM:'MAS',MLOAD:'Charge',SHAFT:'Arbre',MSPEED:'Vit',MTORQUE:'Couple',MPOS:'Pos',SIN:'Ref',CST:'Cst',TRI:'Tri',CMP:'Cmp',SUM:'Sum',GAIN:'Gn',PI:'PI',SV:'Cv',SI:'Ci',TRIGSIN:'Sin',TRIGCOS:'Cos',CLARKE:'Clarke',ICLARKE:'ClarkeInv',PARK:'Park',IPARK:'ParkInv',gnd:'GND'};
 const TRANSFORMS={
   CLARKE:{inputs:['a','b','c'],outputs:['α','β','0']},
   ICLARKE:{inputs:['α','β','0'],outputs:['a','b','c']},
@@ -193,8 +196,8 @@ function pinDefs(c){const t=c.type,p=Object.assign({},DEFAULTS[t],c.p);
   if(TRANSFORMS[t])return TRANSFORMS[t].inputs.map((_,i)=>({x:-2,y:i-1,r:'i'+(i+1)})).concat(TRANSFORMS[t].outputs.map((_,i)=>({x:2,y:i-1,r:'o'+(i+1)})));
   if(t==='XF')return[{x:-2,y:-1,r:'a'},{x:-2,y:1,r:'b'},{x:2,y:-1,r:'c'},{x:2,y:1,r:'d'}];
   if(t==='MWF')return p.layout===0?[{x:-2,y:-1,r:'a'},{x:2,y:-1,r:'b'},{x:-2,y:1,r:'c'},{x:2,y:1,r:'d'}]:[{x:-2,y:-1,r:'a'},{x:-2,y:1,r:'b'},{x:2,y:-1,r:'c'},{x:2,y:1,r:'d'}];
-  if(t==='SPM'||t==='SWF'){
-    const n=Number.isInteger(p.phases)&&p.phases>=2&&p.phases<=12?p.phases:3,star=p.connection!=='delta',count=star?n+1:2*n,top=-Math.floor(count/2),pins=[];
+  if(t==='SPM'||t==='SWF'||t==='ASM'){
+    const n=t==='ASM'?3:Number.isInteger(p.phases)&&p.phases>=2&&p.phases<=12?p.phases:3,star=p.connection!=='delta',count=star?n+1:2*n,top=-Math.floor(count/2),pins=[];
     for(let i=0;i<n;i++){pins.push({x:-3,y:top+(star?i:2*i),r:'s'+i});if(!star)pins.push({x:-3,y:top+2*i+1,r:'t'+i})}
     if(star)pins.push({x:-3,y:top+n,r:'neutral'});
     if(t==='SWF')pins.push({x:3,y:-1,r:'fieldp'},{x:3,y:1,r:'fieldn'});
@@ -207,7 +210,7 @@ function pinDefs(c){const t=c.type,p=Object.assign({},DEFAULTS[t],c.p);
 function pinsOf(c){const rot=((c.rot%4)+4)%4;
   return pinDefs(c).map(d=>{let x=d.x,y=d.y;for(let i=0;i<rot;i++){const t=x;x=-y;y=t}return[c.x+x,c.y+y]})}
 const BLOCK_TYPES=new Set(['SIN','CST','TRI','CMP','SUM','GAIN','PI','MSPEED','MTORQUE','MPOS','TRIGSIN','TRIGCOS',...Object.keys(TRANSFORMS)]);
-const DC_TYPES=new Set(['MPM','MWF']),SYNC_TYPES=new Set(['SPM','SWF']),MOTOR_TYPES=new Set([...DC_TYPES,...SYNC_TYPES]),MECH_TYPES=new Set([...MOTOR_TYPES,'MLOAD']);
+const DC_TYPES=new Set(['MPM','MWF']),SYNC_TYPES=new Set(['SPM','SWF']),AC_TYPES=new Set([...SYNC_TYPES,'ASM']),MOTOR_TYPES=new Set([...DC_TYPES,...AC_TYPES]),MECH_TYPES=new Set([...MOTOR_TYPES,'MLOAD']);
 const K=(x,y)=>x+','+y;
 function makeUF(){const p=new Map();
   const f=k=>{if(!p.has(k))p.set(k,k);let r=k;while(p.get(r)!==r)r=p.get(r);let c=k;while(p.get(c)!==r){const n=p.get(c);p.set(c,r);c=n}return r};
@@ -253,6 +256,13 @@ function compile(circuit){
       e.in=[];for(let i=1;by['i'+i]!==undefined;i++)e.in.push(sigOf(by['i'+i]));
       if(TRANSFORMS[c.type])e.outs=TRANSFORMS[c.type].outputs.map((_,i)=>sigOf(by['o'+(i+1)]));else e.out=sigOf(by.o);
       blocks.push(e);continue}
+    if(c.type==='ASM'){
+      const p=e.p;
+      if(!Object.values(p).filter(v=>typeof v==='number').every(Number.isFinite)||!['star','delta'].includes(p.connection)||!Number.isInteger(p.poles)||p.poles<1||!(p.Rs>0&&p.Rr>0&&p.Lls>0&&p.Llr>0&&p.Lm>0&&p.J>0&&p.B>=0))
+        return{error:c.name+' : paramètres asynchrones invalides (résistances, inductances et inertie positives, frottement positif ou nul, paires de pôles entières).'};
+      e.phaseNodes=Array.from({length:3},(_,i)=>[nodeOf(by['s'+i]),nodeOf(p.connection==='star'?by.neutral:by['t'+i])]);
+      e.ks=Array.from({length:3},()=>nv++);e.kr=[nv++,nv++];e.kw=nv++;
+      elems.push(e);continue}
     if(SYNC_TYPES.has(c.type)){
       const p=e.p;
       if(!Object.values(p).filter(v=>typeof v==='number').every(Number.isFinite)||!Number.isInteger(p.phases)||p.phases<2||p.phases>12||!['star','delta'].includes(p.connection)||!Number.isInteger(p.poles)||p.poles<1||!(p.Rs>0&&p.Ls>0&&p.J>0&&p.B>=0)||(c.type==='SPM'&&!(p.flux>0))||(c.type==='SWF'&&!(p.Rf>0&&p.Lf>0&&p.M>0)))
@@ -326,8 +336,12 @@ function autoDt(net){
     f=Math.max(f,20*p.Rs/leff,20*p.B/p.J,Math.abs(p.poles*p.w0)*200/(2*Math.PI));
     if(e.type==='SWF')f=Math.max(f,20*p.Rf/p.Lf);
   }
+  for(const e of net.elems)if(e.type==='ASM'){
+    const p=e.p,lr=p.Llr+p.Lm,leak=p.Lls+p.Lm*p.Llr/lr;
+    f=Math.max(f,20*p.Rs/leak,20*p.Rr/p.Llr,20*p.B/p.J,Math.abs(p.poles*p.w0)*200/(2*Math.PI));
+  }
   for(const e of net.elems)if(e.type==='MLOAD')f=Math.max(f,20*e.p.B/e.p.J);
-  for(const s of net.shafts||[]){const e=s.second,p=e.p,w=Math.abs(s.p.ratio*s.first.p.w0);if(SYNC_TYPES.has(e.type))f=Math.max(f,p.poles*w*200/(2*Math.PI))}
+  for(const s of net.shafts||[]){const e=s.second,p=e.p,w=Math.abs(s.p.ratio*s.first.p.w0);if(AC_TYPES.has(e.type))f=Math.max(f,p.poles*w*200/(2*Math.PI))}
   if(f===0){let tau=Infinity;for(const e of net.elems){if(e.type==='R')for(const o of net.elems){if(o.type==='C')tau=Math.min(tau,e.p.R*o.p.C);if(o.type==='L')tau=Math.min(tau,o.p.L/e.p.R)}}
     return isFinite(tau)?tau/20:1e-5}
   return 1/f}
@@ -349,6 +363,14 @@ function syncState(e,currents,field,theta){
   return{cos,sin,flux,sumc,sums,stator:currents.map((i,k)=>p.Ls*i+flux*cos[k]),
     field:e.type==='SWF'?p.Lf*field+p.M*sumc:0,torque:-p.poles*flux*sums};
 }
+/* Rotor ramené au stator, composantes αβ à conservation de l'amplitude. */
+const ASM_A=[1,-0.5,-0.5],ASM_B=[0,Math.sqrt(3)/2,-Math.sqrt(3)/2];
+function inductionState(e,i,r){
+  const p=e.p,alpha=2/3*i.reduce((s,v,k)=>s+v*ASM_A[k],0),beta=2/3*i.reduce((s,v,k)=>s+v*ASM_B[k],0),lr=p.Llr+p.Lm;
+  return{alpha,beta,rotor:[p.Lm*alpha+lr*r[0],p.Lm*beta+lr*r[1]],
+    stator:i.map((v,k)=>p.Lls*v+p.Lm*(ASM_A[k]*(alpha+r[0])+ASM_B[k]*(beta+r[1]))),
+    torque:1.5*p.poles*p.Lm*(r[0]*beta-r[1]*alpha)};
+}
 function Sim(net,dt){
   this.net=net;this.dt=dt;this.nn=net.N-1;this.n=this.nn+net.nv;
   this.A=new Float64Array(this.n*this.n);this.b=new Float64Array(this.n);
@@ -357,6 +379,7 @@ function Sim(net,dt){
     if(e.type==='MLOAD'){e.omega=e.p.w0;e.theta=e.p.theta0}
     if(DC_TYPES.has(e.type)){e.ia=e.p.ia0;e.ifield=e.type==='MWF'?e.p.if0:1;e.omega=e.p.w0;e.theta=e.p.theta0;e.torque=e.p.K*e.ifield*e.ia;e.emf=e.p.K*e.ifield*e.omega}
     if(SYNC_TYPES.has(e.type)){e.currents=Array(e.p.phases).fill(0);e.ifield=e.type==='SWF'?e.p.if0:0;e.omega=e.p.w0;e.theta=e.p.theta0;e.torque=0;e.fluxState=syncState(e,e.currents,e.ifield,e.theta);e.phaseVoltages=Array(e.p.phases).fill(0);e.vfield=0}
+    if(e.type==='ASM'){e.currents=[0,0,0];e.rotorCurrents=[0,0];e.omega=e.p.w0;e.theta=e.p.theta0;e.torque=0;e.fluxState=inductionState(e,e.currents,e.rotorCurrents);e.phaseVoltages=[0,0,0]}
     if(e.type==='L')e.i=e.p.i0||0;if(e.type==='C')e.vc=e.p.v0||0;
     if(e.type==='XF'){const p=e.p,L1=p.Lp,L2=p.Lp/(p.n*p.n),kk=Math.min(Math.max(p.k,0),0.9999),M=(p.inv?-1:1)*kk*Math.sqrt(L1*L2),D=L1*L2-M*M;e.g11=dt*L2/D;e.g12=-dt*M/D;e.g22=dt*L1/D;e.i1=0;e.i2=0;e.v2=0}}
   for(const s of net.shafts||[]){s.second.omega=s.p.ratio*s.first.omega;if(s.load)s.load.omega=s.second.omega}
@@ -396,7 +419,7 @@ Sim.prototype.step=function(t){
   const {n,nn,A,b,dt}=this,els=this.net.elems;
   this.error=null;
   const motors=els.filter(e=>MOTOR_TYPES.has(e.type));
-  for(const e of motors){e.guessA=e.ia;e.guessF=e.ifield;e.guessW=e.omega;if(SYNC_TYPES.has(e.type))e.guessI=e.currents.slice()}
+  for(const e of motors){e.guessA=e.ia;e.guessF=e.ifield;e.guessW=e.omega;if(AC_TYPES.has(e.type))e.guessI=e.currents.slice();if(e.type==='ASM')e.guessR=e.rotorCurrents.slice()}
   this.signals(t);
   for(const e of els){const p=e.p;
     if(e.type==='SW')e.gate=p.mode==='ext'?((this.sig[e.gnet]>0.5)!==!!p.inv):this.gateAt(e,t);
@@ -412,6 +435,27 @@ Sim.prototype.step=function(t){
         case'R':G(a,bn,1/p.R);break;
         case'C':{const g=p.C/dt;G(a,bn,g);I(a,bn,-g*e.vc);break}
         case'L':{const g=dt/p.L;G(a,bn,g);I(a,bn,e.i);break}
+        case'ASM':{
+          const w=nn+e.kw,iw=e.guessI,ir=e.guessR,ww=e.guessW,ia=nn+e.kr[0],ib=nn+e.kr[1],lr=p.Llr+p.Lm;
+          const s=inductionState(e,iw,ir),prev=e.fluxState,pe=p.poles*ww;
+          const branch=(x,y,row)=>{if(x>0){A[(x-1)*n+row]+=1;A[row*n+x-1]+=1}if(y>0){A[(y-1)*n+row]-=1;A[row*n+y-1]-=1}};
+          const linear=(row,res,terms)=>{for(const [col,deriv,value] of terms){A[row*n+col]+=deriv;b[row]+=deriv*value}b[row]-=res};
+          for(let k=0;k<3;k++){
+            const row=nn+e.ks[k];branch(e.phaseNodes[k][0],e.phaseNodes[k][1],row);
+            const terms=iw.map((v,j)=>[nn+e.ks[j],-(k===j?p.Rs+p.Lls/dt:0)-p.Lm*(2/3)*(ASM_A[k]*ASM_A[j]+ASM_B[k]*ASM_B[j])/dt,v]);
+            terms.push([ia,-p.Lm*ASM_A[k]/dt,ir[0]],[ib,-p.Lm*ASM_B[k]/dt,ir[1]]);
+            linear(row,-p.Rs*iw[k]-(s.stator[k]-prev.stator[k])/dt,terms);
+          }
+          const ta=iw.map((v,k)=>[nn+e.ks[k],p.Lm*2/3*(ASM_A[k]/dt+pe*ASM_B[k]),v]);
+          ta.push([ia,p.Rr+lr/dt,ir[0]],[ib,pe*lr,ir[1]],[w,p.poles*s.rotor[1],ww]);
+          linear(ia,p.Rr*ir[0]+(s.rotor[0]-prev.rotor[0])/dt+pe*s.rotor[1],ta);
+          const tb=iw.map((v,k)=>[nn+e.ks[k],p.Lm*2/3*(ASM_B[k]/dt-pe*ASM_A[k]),v]);
+          tb.push([ia,-pe*lr,ir[0]],[ib,p.Rr+lr/dt,ir[1]],[w,-p.poles*s.rotor[0],ww]);
+          linear(ib,p.Rr*ir[1]+(s.rotor[1]-prev.rotor[1])/dt-pe*s.rotor[0],tb);
+          const kt=1.5*p.poles*p.Lm,terms=iw.map((v,k)=>[nn+e.ks[k],-kt*2/3*(ir[0]*ASM_B[k]-ir[1]*ASM_A[k]),v]);
+          terms.push([ia,-kt*s.beta,ir[0]],[ib,kt*s.alpha,ir[1]],[w,p.J/dt+p.B,ww]);
+          linear(w,(p.J/dt+p.B)*ww-p.J/dt*e.omega+p.Tload-s.torque,terms);
+          break}
         case'SPM':case'SWF':{
           const field=e.type==='SWF',fi=field?nn+e.kf:-1,w=nn+e.kw,iw=e.guessI,fw=e.guessF,ww=e.guessW;
           const s=syncState(e,iw,fw,e.theta+dt*ww),prev=e.fluxState;
@@ -476,6 +520,7 @@ Sim.prototype.step=function(t){
       const values=[[b[nn+e.kw],e,'guessW']];
       if(DC_TYPES.has(e.type))values.push([b[nn+e.ka],e,'guessA']);
       else for(let k=0;k<e.ks.length;k++)values.push([b[nn+e.ks[k]],e.guessI,k]);
+      if(e.type==='ASM')for(let k=0;k<2;k++)values.push([b[nn+e.kr[k]],e.guessR,k]);
       if(e.type==='MWF'||e.type==='SWF')values.push([b[nn+e.kf],e,'guessF']);
       for(const [value,obj,key] of values){if(!Number.isFinite(value)){this.error=e.name+' : résultat moteur non fini.';return false}
         if(Math.abs(value-obj[key])>1e-9+1e-7*Math.max(Math.abs(value),Math.abs(obj[key])))ch=true;
@@ -489,6 +534,12 @@ Sim.prototype.step=function(t){
       case'R':e.iab=v/p.R;break;
       case'C':{const g=p.C/dt;e.iab=g*(v-e.vc);e.vc=v;break}
       case'L':{e.i+=dt/p.L*v;e.iab=e.i;break}
+      case'ASM':{
+        e.currents=e.ks.map(k=>b[nn+k]);e.rotorCurrents=e.kr.map(k=>b[nn+k]);e.omega=b[nn+e.kw];e.theta+=dt*e.omega;
+        e.fluxState=inductionState(e,e.currents,e.rotorCurrents);e.torque=e.fluxState.torque;
+        e.phaseVoltages=e.phaseNodes.map(([x,y])=>(x>0?b[x-1]:0)-(y>0?b[y-1]:0));
+        if(![...e.currents,...e.rotorCurrents,e.omega,e.theta,e.torque,...e.phaseVoltages].every(Number.isFinite)){this.error=e.name+' : résultat de machine asynchrone non fini.';return false}
+        break}
       case'SPM':case'SWF':{
         e.currents=e.ks.map(k=>b[nn+k]);e.ifield=e.type==='SWF'?b[nn+e.kf]:0;e.omega=b[nn+e.kw];e.theta+=dt*e.omega;
         e.fluxState=syncState(e,e.currents,e.ifield,e.theta);e.torque=e.fluxState.torque;
@@ -717,8 +768,33 @@ const PRESETS={
   b.add('SHAFT',40,7,0,{motor1:ms.id,motor2:dc.id,ratio:0.5},'Arbre1');
   return b.out({title:'Synchrone moteur et MCC génératrice',tstop:2,probes:[['MS1','speed'],['M1','speed'],['MS1','torque'],['M1','torque'],['Arbre1','shaftPower'],['M1','v']]})},
  foccurrent(){return focExample(false)},
- focspeed(){return focExample(true)}
+ focspeed(){return focExample(true)},
+ asmstart(){return inductionExample(false)},
+ asminverter(){return inductionExample(true)}
 };
+function inductionExample(inverter){
+  const b=new Builder(),machine=b.add('ASM',60,10,0,{},'MAS1');
+  const load=b.add('MLOAD',70,10,0,{J:.01,B:.001,Tload:.3},'Charge');
+  b.add('SHAFT',65,5,0,{motor1:machine.id,motor2:load.id,ratio:1},'Arbre');
+  if(inverter){
+    b.add('Vdc',6,15,1,{V:48},'Bus');b.add('gnd',6,26,0,{},'GND');
+    b.wire(6,13,6,4);b.wire(6,4,32,4);b.wire(6,17,6,26);b.wire(6,26,32,26);
+    for(let k=0;k<3;k++){
+      const x=12+10*k,y=8+6*k,sp={mode:'spwm',fsw:500,fref:10,m:.8,ph:-120*k};
+      b.add('SW',x,y-2,1,{...sp,inv:0},'H'+k);b.add('SW',x,y+2,1,{...sp,inv:1},'L'+k);
+      if(y-4>4)b.wire(x,4,x,y-4);if(y+4<26)b.wire(x,y+4,x,26);
+      const route=47+3*k;b.wire(x,y,route,y);b.wire(route,y,route,8+k);b.wire(route,8+k,57,8+k);
+    }
+  }else{
+    for(let k=0;k<3;k++){
+      const x=6+7*k;b.add('Vac',x,18,1,{amp:40,f:10,ph:180-120*k},'E'+(k+1));
+      b.wire(x,16,x,8+k);b.wire(x,8+k,57,8+k);b.wire(x,20,x,24);if(k)b.wire(6,24,x,24);
+    }
+    b.wire(57,11,55,11);b.wire(55,11,55,24);b.wire(6,24,55,24);b.add('gnd',6,24,0,{},'GND');
+  }
+  return b.out({title:inverter?'Asynchrone à cage alimentée par onduleur':'Démarrage direct de la machine asynchrone',tstop:1,
+    probes:[['MAS1','phaseI0'],['MAS1','speed'],['MAS1','torque'],['Charge','speed'],['Arbre','shaftPower']]});
+}
 function focExample(speed){
   const b=new Builder();
   b.add('Vdc',10,20,1,{V:24},'Bus');b.add('gnd',10,32,0,{},'GND');
@@ -787,9 +863,9 @@ function fmtSI(x,d){if(x===0||!isFinite(x))return x===0?'0':String(x);d=d||3;con
 function parseSI(s){s=String(s).trim().replace(',','.').replace('µ','u');const m=s.match(/^([-+]?\d*\.?\d+(?:e[-+]?\d+)?)\s*(meg|[GMkmunpf]?)/i);if(!m)return NaN;
   const mult={G:1e9,M:1e6,meg:1e6,MEG:1e6,k:1e3,K:1e3,m:1e-3,u:1e-6,n:1e-9,p:1e-12,f:1e-15,'':1};let u=m[2];
   if(u.toLowerCase()==='meg')u='meg';return parseFloat(m[1])*(mult[u]!==undefined?mult[u]:1)}
-const TYPES=[['R','Résistance'],['L','Inductance'],['C','Condensateur'],['XF','Transformateur'],['MPM','MCC aimants'],['MWF','MCC bobinée'],['SPM','Synchrone aimants'],['SWF','Synchrone bobinée'],['MLOAD','Charge mécanique'],['SHAFT','Liaison mécanique'],['Vdc','Source DC'],['Vac','Source AC'],['Idc','Source I DC'],['Iac','Source I AC'],['D','Diode'],['SCR','Thyristor'],['SW','Interrupteur'],['gnd','Masse']];
+const TYPES=[['R','Résistance'],['L','Inductance'],['C','Condensateur'],['XF','Transformateur'],['MPM','MCC aimants'],['MWF','MCC bobinée'],['SPM','Synchrone aimants'],['SWF','Synchrone bobinée'],['ASM','Asynchrone à cage'],['MLOAD','Charge mécanique'],['SHAFT','Liaison mécanique'],['Vdc','Source DC'],['Vac','Source AC'],['Idc','Source I DC'],['Iac','Source I AC'],['D','Diode'],['SCR','Thyristor'],['SW','Interrupteur'],['gnd','Masse']];
 const CTRL=[['SIN','Sinus'],['CST','Constante'],['TRI','Triangle'],['CMP','Comparateur'],['SUM','Sommateur'],['GAIN','Gain'],['PI','Régulateur PI'],['TRIGSIN','Sinus angle'],['TRIGCOS','Cosinus angle'],['CLARKE','Clarke'],['ICLARKE','Clarke inverse'],['PARK','Park'],['IPARK','Park inverse'],['SV','Capteur tension'],['SI','Capteur courant'],['MSPEED','Capteur vitesse'],['MTORQUE','Capteur couple'],['MPOS','Capteur position']];
-const GLYPH={SUM:'Σ',GAIN:'K',PI:'PI',SV:'V',SI:'A',MPM:'M',MWF:'M',SPM:'MS',SWF:'MS',MSPEED:'Ω',MTORQUE:'T',MPOS:'θ'};
+const GLYPH={SUM:'Σ',GAIN:'K',PI:'PI',SV:'V',SI:'A',MPM:'M',MWF:'M',SPM:'MS',SWF:'MS',ASM:'MAS',MSPEED:'Ω',MTORQUE:'T',MPOS:'θ'};
 const MOTOR_FIELDS=[{k:'Ra',l:'Résistance induit',u:'Ω'},{k:'La',l:'Inductance induit',u:'H'}];
 const MOTOR_MECH=[{k:'J',l:'Inertie',u:'kg·m²'},{k:'B',l:'Frottement visqueux',u:'N·m·s/rad'},{k:'Tload',l:'Couple de charge signé',u:'N·m'},{k:'ia0',l:'Courant induit initial',u:'A'},{k:'w0',l:'Vitesse initiale',u:'rad/s'},{k:'theta0',l:'Position initiale',u:'rad'}];
 const SYNC_FIELDS=[{k:'phases',l:'Nombre de phases (2 à 12)',t:'phases'},{k:'connection',l:'Couplage stator',t:'connection'},{k:'Rs',l:'Résistance par phase',u:'Ω'},{k:'Ls',l:'Inductance par phase',u:'H'}];
@@ -799,6 +875,7 @@ const SCHEMA={
  MLOAD:[{k:'J',l:'Inertie',u:'kg·m²'},{k:'B',l:'Frottement visqueux',u:'N·m·s/rad'},{k:'Tload',l:'Couple résistant signé',u:'N·m'},{k:'w0',l:'Vitesse initiale',u:'rad/s'},{k:'theta0',l:'Position initiale',u:'rad'}],
  SPM:[...SYNC_FIELDS,{k:'flux',l:'Flux des aimants par phase (crête)',u:'Wb'},...SYNC_MECH],
  SWF:[...SYNC_FIELDS,{k:'Rf',l:'Résistance inducteur',u:'Ω'},{k:'Lf',l:'Inductance inducteur',u:'H'},{k:'M',l:'Mutuelle rotor-phase (crête)',u:'H'},{k:'if0',l:'Courant inducteur initial',u:'A'},...SYNC_MECH],
+ ASM:[{k:'connection',l:'Couplage stator',t:'connection'},{k:'Rs',l:'Résistance statorique par phase',u:'Ω'},{k:'Rr',l:'Résistance rotorique ramenée au stator',u:'Ω'},{k:'Lls',l:'Inductance de fuite statorique',u:'H'},{k:'Llr',l:'Inductance de fuite rotorique ramenée au stator',u:'H'},{k:'Lm',l:'Inductance magnétisante',u:'H'},...SYNC_MECH],
  MPM:[...MOTOR_FIELDS,{k:'K',l:'Constante électromécanique',u:'V·s/rad'},...MOTOR_MECH],
  MWF:[...MOTOR_FIELDS,{k:'Rf',l:'Résistance inducteur',u:'Ω'},{k:'Lf',l:'Inductance inducteur',u:'H'},{k:'K',l:'Constante de couplage (E = K · If · Ω)',u:'H'},...MOTOR_MECH,{k:'if0',l:'Courant inducteur initial',u:'A'}],
  MSPEED:[{k:'motor',l:'Moteur',t:'motor'}],MTORQUE:[{k:'motor',l:'Moteur',t:'motor'}],MPOS:[{k:'motor',l:'Moteur',t:'motor'}],
@@ -871,7 +948,7 @@ function drawSymbol(ctx,type,p,col,body){
    case'MLOAD':L(-2,0,-1,0);O(0,0,1);ctx.font='.65px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('J',0,0);break;
    case'MWF':O(0,0,.75);L(-2,-1,-.65,-1);L(-.65,-1,-.45,-.6);L(2,-1,.65,-1);L(.65,-1,.45,-.6);L(-2,1,-.65,1);L(-.65,1,-.45,.6);L(2,1,.65,1);L(.65,1,.45,.6);
      ctx.font='.36px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('A+',-1.5,-1.27);ctx.fillText(p.layout===0?'A−':'F+',1.5,-1.27);ctx.fillText(p.layout===0?'F+':'A−',-1.5,1.27);ctx.fillText('F−',1.5,1.27);break;
-   case'SPM':case'SWF':{
+   case'SPM':case'SWF':case'ASM':{
      const pins=pinDefs({type,p}),left=pins.filter(q=>q.x<0),low=left[0].y-.5,high=left[left.length-1].y+.5;
      ctx.strokeRect(-1.5,low,3,high-low);
      ctx.font='.35px sans-serif';ctx.textAlign='left';ctx.textBaseline='middle';
@@ -889,7 +966,7 @@ function compLabel(c){const p=c.p;
    case'Vac':return fmtSI(p.amp)+' V · '+fmtSI(p.f)+'Hz'+(p.ph?' · '+p.ph+'°':'');
    case'SW':if(p.mode==='ext')return 'G ext.'+(p.inv?' inv.':'');return (p.mode==='spwm'?'m='+p.m+' '+(p.inv?'inv.':''):'α='+p.duty)+' @'+fmtSI(p.fsw)+'Hz';
    case'XF':return fmtSI(p.Lp)+'H · '+fmtSI(p.n)+':1 · k='+p.k;
-   case'MPM':return 'aimants';case'MWF':return 'inducteur bobiné';case'SPM':case'SWF':return p.phases+' phases · '+(p.connection==='star'?'étoile':'triangle');case'MLOAD':return 'J='+fmtSI(p.J)+' · Cr='+fmtSI(p.Tload);case'SHAFT':return 'Ω₂/Ω₁ = '+fmtSI(p.ratio);
+   case'MPM':return 'aimants';case'MWF':return 'inducteur bobiné';case'SPM':case'SWF':return p.phases+' phases · '+(p.connection==='star'?'étoile':'triangle');case'ASM':return '3 phases · '+(p.connection==='star'?'étoile':'triangle');case'MLOAD':return 'J='+fmtSI(p.J)+' · Cr='+fmtSI(p.Tload);case'SHAFT':return 'Ω₂/Ω₁ = '+fmtSI(p.ratio);
    case'CLARKE':return 'abc → αβ0';case'ICLARKE':return 'αβ0 → abc';case'PARK':return 'αβ0 → dq0';case'IPARK':return 'dq0 → αβ0';
    case'Idc':return fmtSI(p.I)+' A';case'Iac':return fmtSI(p.amp)+' A · '+fmtSI(p.f)+'Hz'+(p.ph?' · '+p.ph+'°':'');
    case'SIN':return fmtSI(p.amp)+' · '+fmtSI(p.f)+'Hz'+(p.ph?' · '+p.ph+'°':'');case'CST':return fmtSI(p.value);
@@ -897,7 +974,7 @@ function compLabel(c){const p=c.p;
    case'SUM':return (p.s1<0?'−':'')+'e1'+(p.s2<0?' − ':' + ')+'e2';case'GAIN':return 'K='+fmtSI(p.K);case'PI':return 'Kp='+fmtSI(p.Kp)+' Ki='+fmtSI(p.Ki);
    case'SV':return 'K='+fmtSI(p.K);case'SI':return 'K='+fmtSI(p.K);
    case'D':return p.Vf+' V';case'SCR':return p.mode==='ext'?'G ext.':'α='+p.alpha+'° · réf '+p.ph+'°';default:return ''}}
-function makeIcon(type){const cv=document.createElement('canvas');cv.width=112;cv.height=52;const x=cv.getContext('2d');x.scale(2,2);x.translate(28,type==='gnd'?4:(type==='SV'||type==='SI')?18:TRANSFORMS[type]&&TRANSFORMS[type].inputs.length===4?10:13);const scale=SYNC_TYPES.has(type)||TRANSFORMS[type]?6:9.5;x.scale(scale,scale);x.lineWidth=.14;
+function makeIcon(type){const cv=document.createElement('canvas');cv.width=112;cv.height=52;const x=cv.getContext('2d');x.scale(2,2);x.translate(28,type==='gnd'?4:(type==='SV'||type==='SI')?18:TRANSFORMS[type]&&TRANSFORMS[type].inputs.length===4?10:13);const scale=AC_TYPES.has(type)||TRANSFORMS[type]?6:9.5;x.scale(scale,scale);x.lineWidth=.14;
   drawSymbol(x,type,Object.assign({},DEFAULTS[type]),css('--ink'),true);if(GLYPH[type]){x.font='600 1.35px '+css('--ui');x.textAlign='center';x.textBaseline='middle';x.fillText(GLYPH[type],0,0)}return cv}
 
 /* ---------- Palette ---------- */
@@ -926,7 +1003,7 @@ const toW=(px,py)=>[(px-view.ox)/(G*view.s),(py-view.oy)/(G*view.s)];
 function compLocal(c,wx,wy){let dx=wx-c.x,dy=wy-c.y;const r=((c.rot%4)+4)%4;for(let i=0;i<r;i++){const t=dx;dx=dy;dy=-t}return[dx,dy]}
 function hitComp(wx,wy){for(let i=circuit.comps.length-1;i>=0;i--){const c=circuit.comps[i],[lx,ly]=compLocal(c,wx,wy);
   if(c.type==='gnd'){if(Math.abs(lx)<.8&&ly>-.3&&ly<1.2)return c}
-  else if(SYNC_TYPES.has(c.type)){const left=pinDefs(c).filter(p=>p.x<0);if(Math.abs(lx)<=3.1&&ly>=left[0].y-.6&&ly<=left[left.length-1].y+.6)return c}
+  else if(AC_TYPES.has(c.type)){const left=pinDefs(c).filter(p=>p.x<0);if(Math.abs(lx)<=3.1&&ly>=left[0].y-.6&&ly<=left[left.length-1].y+.6)return c}
   else if(TRANSFORMS[c.type]){if(Math.abs(lx)<=2.1&&ly>=-1.5&&ly<=(TRANSFORMS[c.type].inputs.length===4?2.5:1.5))return c}
   else if(Math.abs(lx)<=2.1&&Math.abs(ly)<=1.3)return c}return null}
 function segDist(w,x,y){const ax=w.x1,ay=w.y1,bx=w.x2,by=w.y2,dx=bx-ax,dy=by-ay,l=dx*dx+dy*dy;let t=l?((x-ax)*dx+(y-ay)*dy)/l:0;t=Math.max(0,Math.min(1,t));return Math.hypot(x-(ax+t*dx),y-(ay+t*dy))}
@@ -1002,7 +1079,7 @@ function drawComp(c,col,selected,probed){
   if(GLYPH[c.type]){cx.fillStyle=col;cx.font='600 '+Math.max(10,15*view.s)+'px '+css('--ui');cx.textAlign='center';cx.textBaseline='middle';cx.fillText(GLYPH[c.type],px,py)}
   drawAnn(c);
   if(c.type==='gnd'||!c.name)return;
-  const sync=SYNC_TYPES.has(c.type),left=sync?pinDefs(c).filter(p=>p.x<0):null;
+  const sync=AC_TYPES.has(c.type),left=sync?pinDefs(c).filter(p=>p.x<0):null;
   const tf=TRANSFORMS[c.type],tall=tf&&tf.inputs.length===4;
   const bl=BLOCK_TYPES.has(c.type)||c.type==='XF'||c.type==='MWF'||sync,top=sync?Math.abs(left[0].y)+.8:(c.type==='SV'||c.type==='SI'||(c.type==='SW'&&c.p.mode==='ext'))?2.35:bl?1.7:1.05,rgt=sync?Math.max(Math.abs(left[0].y),Math.abs(left[left.length-1].y))+.8:tall?2.7:bl?1.7:1.2,v=((c.rot%2)===1);cx.fillStyle=col;cx.font='500 '+Math.max(10,12*view.s)+'px '+css('--ui');
   if(!v){cx.textAlign='center';cx.textBaseline='alphabetic';cx.fillText(c.name,px,py-top*u);cx.fillStyle=css('--muted');cx.font=Math.max(9,11*view.s)+'px '+css('--mono');if(showVals)cx.fillText(compLabel(c),px,py+(sync?left[left.length-1].y+.5:tall?2.5:tf?1.5:c.type==='SW'&&c.p.body?1.55:bl?1.45:1.2)*u+8*view.s)}
@@ -1072,6 +1149,7 @@ function renderInsp(){const box=$('insp');box.innerHTML='';
   if(c.type==='SHAFT')box.append(el('div',{class:'note'},'Liaison idéale, sans pertes ni élasticité, active dans les deux sens. Sélectionnez deux machines ou charges : Ω₂ = rapport × Ω₁. Une charge supplémentaire peut être associée côté 2, à la même vitesse. Un rapport négatif inverse le sens. Les vitesses initiales côté 2 sont déduites de celle de l’élément 1 ; les positions initiales restent indépendantes. Chaque élément ne peut appartenir qu’à une liaison. La puissance transmise côté 2 inclut la charge supplémentaire.'));
   if(c.type==='MLOAD')box.append(el('div',{class:'note'},'Charge inertielle sélectionnable comme élément d’une liaison ou comme charge supplémentaire côté 2. J · dΩ/dt = couple transmis − B · Ω − couple résistant signé. Le couple résistant garde son signe même si la vitesse s’inverse : ce n’est pas un frottement sec.'));
   if(SYNC_TYPES.has(c.type))box.append(el('div',{class:'note'},'Stator à gauche : P1…Pn et N en étoile, ou P1+/P1−… en triangle. Reliez les enroulements extérieurement pour former le triangle. '+(c.type==='SWF'?'Excitation F+/F− à droite. ':'')+'Modèle sinusoïdal sans saillance ni saturation ; courants initiaux des phases nuls. À position mécanique nulle, le flux de la phase 1 est maximal. Deux phases en quadrature, sinon déphasage régulier. Nombre de phases et couplage verrouillés dès qu’une borne est câblée. Les exemples à fréquence fixe démarrent à la vitesse de synchronisme ; un démarrage à fréquence fixe peut nécessiter un entraînement ou une commande adaptée. Vérifiez le pas si la vitesse varie fortement.'));
+  if(c.type==='ASM')box.append(el('div',{class:'note'},'Machine triphasée à cage : rotor court-circuité interne, paramètres rotoriques ramenés au stator. En étoile : P1…P3 et N ; en triangle : P1+/P1−… à relier extérieurement. Couplage verrouillé dès qu’une borne est câblée. Flux et courants initiaux nuls. Modèle linéaire sinusoïdal sans saturation, pertes fer ni effet de peau. La composante homopolaire ne traverse que la fuite statorique. En génératrice, une source doit fournir l’aimantation.'));
   if(MOTOR_TYPES.has(c.type))box.append(el('div',{class:'note'},'Courants positifs de + vers − ; couple de charge signé soustrait au couple moteur. Position mécanique en radians non limitée à un tour ; frottement purement visqueux.'));
   if(['MSPEED','MTORQUE','MPOS'].includes(c.type))box.append(el('div',{class:'note'},'Sélectionnez le moteur. La sortie de commande utilise la valeur du pas précédent : vitesse en rad/s, couple en N·m ou position non limitée en rad.'));
   if(c.type==='TRI')box.append(el('div',{class:'note'},'Le rapport cyclique indique la fraction de période consacrée à la montée : 0 = rampe descendante, 0,5 = triangle symétrique, 1 = rampe montante. Pour une pente très courte, réduisez le pas de simulation si nécessaire.'));
@@ -1105,7 +1183,7 @@ function renderInsp(){const box=$('insp');box.innerHTML='';
   if(kinds.includes('v')&&kinds.includes('i')&&!['XF','SV','SI','Vdc','Vac','Idc','Iac'].includes(c.type))row.append(el('button',{class:'btn sm',onclick:()=>addPower(c.id)},'+ puissance'));
   if(kinds.length){box.append(el('div',{class:'lbl',style:'margin:8px 0 5px'},'Ajouter une sonde'),row)}
   const r2=el('div',{class:'row',style:'margin-top:10px'});r2.append(el('button',{class:'btn sm',onclick:rotateSel},'Pivoter'),el('button',{class:'btn sm',onclick:deleteSel},'Supprimer'));box.append(r2)}
-function kindsFor(c){const t=c.type;if(t==='gnd')return[];if(t==='MLOAD')return['speed','rpm','angle'];if(t==='SHAFT')return['shaft1','shaft2','shaftPower'];if(t==='XF')return['v','i','v2','i2'];if(t==='MPM')return['v','i','speed','rpm','torque','angle','emf'];if(t==='MWF')return['v','i','vfield','ifield','speed','rpm','torque','angle','emf'];if(SYNC_TYPES.has(t))return[...Array.from({length:c.p.phases},(_,i)=>'phaseV'+i),...Array.from({length:c.p.phases},(_,i)=>'phaseI'+i),...(t==='SWF'?['vfield','ifield']:[]),'speed','rpm','torque','angle'];if(TRANSFORMS[t])return['out1','out2','out3'];if(BLOCK_TYPES.has(t))return['o'];if(t==='SV')return['v','va','vb','o'];if(t==='SI')return['i','v','o'];if(t==='SW'||t==='SCR')return['v','i','va','vb','g'];return['v','i','va','vb']}
+function kindsFor(c){const t=c.type;if(t==='gnd')return[];if(t==='MLOAD')return['speed','rpm','angle'];if(t==='SHAFT')return['shaft1','shaft2','shaftPower'];if(t==='XF')return['v','i','v2','i2'];if(t==='MPM')return['v','i','speed','rpm','torque','angle','emf'];if(t==='MWF')return['v','i','vfield','ifield','speed','rpm','torque','angle','emf'];if(AC_TYPES.has(t)){const n=t==='ASM'?3:c.p.phases;return[...Array.from({length:n},(_,i)=>'phaseV'+i),...Array.from({length:n},(_,i)=>'phaseI'+i),...(t==='SWF'?['vfield','ifield']:[]),'speed','rpm','torque','angle']}if(TRANSFORMS[t])return['out1','out2','out3'];if(BLOCK_TYPES.has(t))return['o'];if(t==='SV')return['v','va','vb','o'];if(t==='SI')return['i','v','o'];if(t==='SW'||t==='SCR')return['v','i','va','vb','g'];return['v','i','va','vb']}
 function probeKindLabel(c,k){if(TRANSFORMS[c.type]&&/^out[1-3]$/.test(k))return 'sortie '+TRANSFORMS[c.type].outputs[Number(k.slice(3))-1];return(k==='i'&&(c.type==='Vdc'||c.type==='Vac'))?'courant fourni':KIND[k][0]}
 function probeName(p){if(p.kind==='m')return mathName(p);const c=circuit.comps.find(c=>c.id===p.comp);if(!c)return'?';if(c.type==='XF'&&(p.kind==='v'||p.kind==='i'))return c.name+' · '+(p.kind==='v'?'tension primaire':'courant primaire');return c.name+' · '+probeKindLabel(c,p.kind)}
 function addProbe(comp,kind){if(probes.some(p=>p.comp===comp&&p.kind===kind))return;snap();const np={id:pidc++,comp,kind,show:true};probes.push(np);reg(np);persist();renderProbes();simulate()}
