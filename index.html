@@ -178,7 +178,7 @@ const DEFAULTS={
   SCR:{mode:'angle',Vf:1,Ron:0.01,alpha:30,ph:0,fref:50,width:60},
   SIN:{amp:1,f:50,ph:0,off:0}, CST:{value:0.5}, TRI:{f:20000,min:0,max:1,duty:0.5}, CMP:{high:1,low:0,hyst:0},
   TRIGSIN:{}, TRIGCOS:{}, CLARKE:{}, ICLARKE:{}, PARK:{}, IPARK:{},
-  SUM:{s1:1,s2:-1}, GAIN:{K:1,limit:0,min:0,max:1}, PI:{Kp:0.01,Ki:20,Kd:0,tauD:1e-3,min:0,max:1,i0:0,limit:1}, TF:{num:'1',den:'0.2 1'}, SV:{K:1}, SI:{K:1,Rs:1e-3},
+  SUM:{inputs:2,s1:1,s2:-1,...Object.fromEntries(Array.from({length:10},(_,i)=>['s'+(i+3),1]))}, GAIN:{K:1,limit:0,min:0,max:1}, PI:{Kp:0.01,Ki:20,Kd:0,tauD:1e-3,min:0,max:1,i0:0,limit:1}, TF:{num:'1',den:'0.2 1'}, SV:{K:1}, SI:{K:1,Rs:1e-3},
   SW:{mode:'pwm',fsw:20000,duty:0.5,m:0.8,fref:50,ph:0,inv:0,body:1,Ron:0.01,Vf:0.7}
 };
 const PREFIX={R:'R',L:'L',C:'C',Vdc:'V',Vac:'E',D:'D',SW:'S',SCR:'T',Idc:'I',Iac:'Ia',XF:'TR',MPM:'M',MWF:'M',SPM:'MS',SWF:'MS',ASM:'MAS',MLOAD:'Charge',SHAFT:'Arbre',MSPEED:'Vit',MTORQUE:'Couple',MPOS:'Pos',SIN:'Ref',CST:'Cst',TRI:'Tri',CMP:'Cmp',SUM:'Sum',GAIN:'Gn',PI:'PI',TF:'H',SV:'Cv',SI:'Ci',TRIGSIN:'Sin',TRIGCOS:'Cos',CLARKE:'Clarke',ICLARKE:'ClarkeInv',PARK:'Park',IPARK:'ParkInv',gnd:'GND'};
@@ -189,12 +189,15 @@ const TRANSFORMS={
   IPARK:{inputs:['d','q','0','θ'],outputs:['α','β','0']}
 };
 function nextName(comps,type){const px=PREFIX[type];let n=1;const used=new Set(comps.map(c=>c.name));while(used.has(px+n))n++;return type==='gnd'?'GND':px+n}
+function sumInputCount(p){return Number.isInteger(p.inputs)&&p.inputs>=2&&p.inputs<=12?p.inputs:2}
+function sumInputY(n,i){return n===2?(i===0?-1:1):i-Math.floor(n/2)}
 function pinDefs(c){const t=c.type,p=Object.assign({},DEFAULTS[t],c.p);
   if(t==='gnd')return[{x:0,y:0,r:'gnd'}];
   if(t==='SHAFT'||t==='MLOAD')return[];
   switch(t){
     case'SIN':case'CST':case'TRI':case'MSPEED':case'MTORQUE':case'MPOS':return[{x:2,y:0,r:'o'}];
-    case'CMP':case'SUM':return[{x:-2,y:-1,r:'i1'},{x:-2,y:1,r:'i2'},{x:2,y:0,r:'o'}];
+    case'CMP':return[{x:-2,y:-1,r:'i1'},{x:-2,y:1,r:'i2'},{x:2,y:0,r:'o'}];
+    case'SUM':{const n=sumInputCount(p);return Array.from({length:n},(_,i)=>({x:-2,y:sumInputY(n,i),r:'i'+(i+1)})).concat({x:2,y:0,r:'o'})}
     case'GAIN':case'PI':case'TF':case'TRIGSIN':case'TRIGCOS':return[{x:-2,y:0,r:'i1'},{x:2,y:0,r:'o'}]}
   if(TRANSFORMS[t])return TRANSFORMS[t].inputs.map((_,i)=>({x:-2,y:i-1,r:'i'+(i+1)})).concat(TRANSFORMS[t].outputs.map((_,i)=>({x:2,y:i-1,r:'o'+(i+1)})));
   if(t==='XF')return[{x:-2,y:-1,r:'a'},{x:-2,y:1,r:'b'},{x:2,y:-1,r:'c'},{x:2,y:1,r:'d'}];
@@ -252,6 +255,8 @@ function compile(circuit){
       const p=e.p;if(!Object.values(p).every(Number.isFinite)||!(p.J>0&&p.B>=0))return{error:c.name+' : inertie positive, frottement positif ou nul et paramètres finis requis.'};
       e.kw=nv++;elems.push(e);continue}
     if(BLOCK_TYPES.has(c.type)){
+      if(c.type==='SUM'&&(!Number.isInteger(e.p.inputs)||e.p.inputs<2||e.p.inputs>12||!Array.from({length:e.p.inputs},(_,i)=>e.p['s'+(i+1)]).every(Number.isFinite)))
+        return{error:c.name+' : le sommateur doit avoir entre 2 et 12 entrées et des coefficients finis.'};
       if(c.type==='TRI'){
         if(!Number.isFinite(e.p.f)||!(e.p.f>0))return{error:c.name+' : la fréquence doit être positive et finie.'};
         if(!Number.isFinite(e.p.duty)||e.p.duty<0||e.p.duty>1)return{error:c.name+' : le rapport cyclique doit être compris entre 0 et 1.'};
@@ -446,7 +451,7 @@ Sim.prototype.signals=function(t){
       case'CST':o=p.value;break;
       case'TRI':{const ph=(t*p.f)%1,c=ph<p.duty?ph/p.duty:(1-ph)/(1-p.duty);o=p.min+(p.max-p.min)*c;break}
       case'CMP':{const h=p.hyst||0;if(b.state){if(i1<i2-h)b.state=0}else if(i1>i2+h)b.state=1;o=b.state?p.high:p.low;break}
-      case'SUM':o=p.s1*i1+p.s2*i2;break;
+      case'SUM':o=p.s1*i1+p.s2*i2;for(let i=2;i<b.in.length;i++)o+=p['s'+(i+1)]*sig[b.in[i]];break;
       case'GAIN':o=p.K*i1;if(p.limit)o=Math.max(p.min,Math.min(p.max,o));break;
       case'TF':o=b.tf.C.reduce((v,c,i)=>v+c*b.x[i],0)+b.tf.direct*i1;break;
       case'TRIGSIN':o=Math.sin(i1);break;
@@ -946,7 +951,7 @@ const SCHEMA={
  CST:[{k:'value',l:'Valeur'}],
  TRI:[{k:'f',l:'Fréquence',u:'Hz'},{k:'min',l:'Valeur basse'},{k:'max',l:'Valeur haute'},{k:'duty',l:'Rapport cyclique de montée (0 à 1)',t:'triduty'}],
  CMP:[{k:'high',l:'Sortie haute'},{k:'low',l:'Sortie basse'},{k:'hyst',l:'Hystérésis'}],
- SUM:[{k:'s1',l:'Signe entrée 1 (±1)'},{k:'s2',l:'Signe entrée 2 (±1)'}],
+ SUM:[{k:'inputs',l:'Nombre d’entrées',t:'suminputs'},...Array.from({length:12},(_,i)=>({k:'s'+(i+1),l:'Coefficient entrée '+(i+1),sumIndex:i+1}))],
  GAIN:[{k:'K',l:'Gain'},{k:'limit',l:'Activer les limites de sortie',t:'chk'},{k:'min',l:'Sortie minimale'},{k:'max',l:'Sortie maximale'}],
  PI:[{k:'Kp',l:'Gain proportionnel Kp'},{k:'Ki',l:'Gain intégral Ki (1/s)'},{k:'Kd',l:'Gain dérivé Kd (s)'},{k:'tauD',l:'Constante du filtre dérivé (s)',t:'positive'},{k:'limit',l:'Activer les limites de sortie',t:'chk'},{k:'min',l:'Sortie minimale'},{k:'max',l:'Sortie maximale'},{k:'i0',l:'Intégrateur initial'}],
  TF:[{k:'num',l:'Numérateur',t:'coeff'},{k:'den',l:'Dénominateur',t:'coeff'}],
@@ -985,8 +990,11 @@ function drawSymbol(ctx,type,p,col,body){
      if(body){L(-.8,.08,-.8,.6);L(-.8,.6,-.3,.6);L(.3,.6,.8,.6);L(.8,.6,.8,.08);ctx.beginPath();ctx.moveTo(.3,.3);ctx.lineTo(.3,.9);ctx.lineTo(-.3,.6);ctx.closePath();ctx.stroke();L(-.3,.3,-.3,.9)}break;
    case'Idc':L(-2,0,-.9,0);O(0,0,.9);L(.9,0,2,0);L(-.5,0,.5,0);L(.5,0,.15,.28);L(.5,0,.15,-.28);break;
    case'Iac':{L(-2,0,-.9,0);O(0,0,.9);L(.9,0,2,0);ctx.beginPath();for(let i=0;i<=20;i++){const x=-.5+i*.05,y=-.28*Math.sin(2*Math.PI*(x+.5));i?ctx.lineTo(x,y):ctx.moveTo(x,y)}ctx.stroke();L(-.35,-1.25,.35,-1.25);L(.35,-1.25,.1,-1.08);L(.35,-1.25,.1,-1.42);break}
-   case'SIN':case'CST':case'TRI':case'SUM':case'PI':case'TF':{ctx.strokeRect(-1.5,-1.2,3,2.4);L(1.5,0,2,0);
-     if(type==='SUM'){L(-2,-1,-1.5,-1);L(-2,1,-1.5,1)}else if(type==='PI'||type==='TF')L(-2,0,-1.5,0);
+   case'SUM':{const n=sumInputCount(p),top=sumInputY(n,0)-.5,bottom=sumInputY(n,n-1)+.5;ctx.strokeRect(-1.5,top,3,bottom-top);L(1.5,0,2,0);
+     ctx.font='.42px sans-serif';ctx.textAlign='left';ctx.textBaseline='middle';
+     for(let i=0;i<n;i++){const y=sumInputY(n,i);L(-2,y,-1.5,y);ctx.fillText(String(i+1),-1.35,y)}break}
+   case'SIN':case'CST':case'TRI':case'PI':case'TF':{ctx.strokeRect(-1.5,-1.2,3,2.4);L(1.5,0,2,0);
+     if(type==='PI'||type==='TF')L(-2,0,-1.5,0);
      if(type==='SIN'){ctx.beginPath();for(let i=0;i<=30;i++){const x=-1+i/15,y=-.6*Math.sin(Math.PI*(x+1));i?ctx.lineTo(x,y):ctx.moveTo(x,y)}ctx.stroke()}
      if(type==='TRI'){ctx.beginPath();ctx.moveTo(-1,.5);ctx.lineTo(-.5,-.5);ctx.lineTo(0,.5);ctx.lineTo(.5,-.5);ctx.lineTo(1,.5);ctx.stroke()}
      if(type==='CST')L(-.8,0,.8,0);break}
@@ -1028,11 +1036,14 @@ function compLabel(c){const p=c.p;
    case'Idc':return fmtSI(p.I)+' A';case'Iac':return fmtSI(p.amp)+' A · '+fmtSI(p.f)+'Hz'+(p.ph?' · '+p.ph+'°':'');
    case'SIN':return fmtSI(p.amp)+' · '+fmtSI(p.f)+'Hz'+(p.ph?' · '+p.ph+'°':'');case'CST':return fmtSI(p.value);
    case'TRI':return fmtSI(p.min)+' … '+fmtSI(p.max)+' · '+fmtSI(p.f)+'Hz · d='+fmtSI(p.duty);case'CMP':return 'in+ > in−'+(p.hyst?' · h='+fmtSI(p.hyst):'');
-   case'SUM':return (p.s1<0?'−':'')+'e1'+(p.s2<0?' − ':' + ')+'e2';case'GAIN':return 'K='+fmtSI(p.K);case'PI':return 'Kp='+fmtSI(p.Kp)+' Ki='+fmtSI(p.Ki)+' Kd='+fmtSI(p.Kd);case'TF':return '('+p.num+') / ('+p.den+')';
+   case'SUM':return Array.from({length:sumInputCount(p)},(_,i)=>{const v=p['s'+(i+1)],a=Math.abs(v),term=(a===1?'':fmtSI(a)+'×')+'e'+(i+1);return(i===0?(v<0?'−':''):(v<0?' − ':' + '))+term}).join('');case'GAIN':return 'K='+fmtSI(p.K);case'PI':return 'Kp='+fmtSI(p.Kp)+' Ki='+fmtSI(p.Ki)+' Kd='+fmtSI(p.Kd);case'TF':return '('+p.num+') / ('+p.den+')';
    case'SV':return 'K='+fmtSI(p.K);case'SI':return 'K='+fmtSI(p.K);
    case'D':return p.Vf+' V';case'SCR':return p.mode==='ext'?'G ext.':'α='+p.alpha+'° · réf '+p.ph+'°';default:return ''}}
 function makeIcon(type){const cv=document.createElement('canvas');cv.width=112;cv.height=52;const x=cv.getContext('2d');x.scale(2,2);x.translate(28,type==='gnd'?4:(type==='SV'||type==='SI')?18:TRANSFORMS[type]&&TRANSFORMS[type].inputs.length===4?10:13);const scale=AC_TYPES.has(type)||TRANSFORMS[type]?6:9.5;x.scale(scale,scale);x.lineWidth=.14;
-  drawSymbol(x,type,Object.assign({},DEFAULTS[type]),css('--ink'),true);if(GLYPH[type]){x.font='600 1.35px '+css('--ui');x.textAlign='center';x.textBaseline='middle';x.fillText(GLYPH[type],0,0)}return cv}
+  if(type==='SUM'){x.strokeStyle=css('--ink');x.fillStyle=css('--ink');x.lineCap='round';x.lineJoin='round';x.strokeRect(-1.5,-1.2,3,2.4);
+    for(const [a,b,c,d] of [[1.5,0,2,0],[-2,-1,-1.5,-1],[-2,1,-1.5,1]]){x.beginPath();x.moveTo(a,b);x.lineTo(c,d);x.stroke()}}
+  else drawSymbol(x,type,Object.assign({},DEFAULTS[type]),css('--ink'),true);
+  if(GLYPH[type]){x.font='600 1.35px '+css('--ui');x.textAlign='center';x.textBaseline='middle';x.fillText(GLYPH[type],0,0)}return cv}
 
 /* ---------- Palette ---------- */
 function buildPalette(){const pal=$('pal');pal.innerHTML='';
@@ -1061,6 +1072,7 @@ function compLocal(c,wx,wy){let dx=wx-c.x,dy=wy-c.y;const r=((c.rot%4)+4)%4;for(
 function hitComp(wx,wy){for(let i=circuit.comps.length-1;i>=0;i--){const c=circuit.comps[i],[lx,ly]=compLocal(c,wx,wy);
   if(c.type==='gnd'){if(Math.abs(lx)<.8&&ly>-.3&&ly<1.2)return c}
   else if(AC_TYPES.has(c.type)){const left=pinDefs(c).filter(p=>p.x<0);if(Math.abs(lx)<=3.1&&ly>=left[0].y-.6&&ly<=left[left.length-1].y+.6)return c}
+  else if(c.type==='SUM'){const n=sumInputCount(c.p);if(Math.abs(lx)<=2.1&&ly>=sumInputY(n,0)-.5&&ly<=sumInputY(n,n-1)+.5)return c}
   else if(TRANSFORMS[c.type]){if(Math.abs(lx)<=2.1&&ly>=-1.5&&ly<=(TRANSFORMS[c.type].inputs.length===4?2.5:1.5))return c}
   else if(Math.abs(lx)<=2.1&&Math.abs(ly)<=1.3)return c}return null}
 function segDist(w,x,y){const ax=w.x1,ay=w.y1,bx=w.x2,by=w.y2,dx=bx-ax,dy=by-ay,l=dx*dx+dy*dy;let t=l?((x-ax)*dx+(y-ay)*dy)/l:0;t=Math.max(0,Math.min(1,t));return Math.hypot(x-(ax+t*dx),y-(ay+t*dy))}
@@ -1136,10 +1148,10 @@ function drawComp(c,col,selected,probed){
   if(GLYPH[c.type]){cx.fillStyle=col;cx.font='600 '+Math.max(10,15*view.s)+'px '+css('--ui');cx.textAlign='center';cx.textBaseline='middle';cx.fillText(GLYPH[c.type],px,py)}
   drawAnn(c);
   if(c.type==='gnd'||!c.name)return;
-  const sync=AC_TYPES.has(c.type),left=sync?pinDefs(c).filter(p=>p.x<0):null;
+  const sync=AC_TYPES.has(c.type),left=sync?pinDefs(c).filter(p=>p.x<0):null,sum=c.type==='SUM',sn=sum?sumInputCount(c.p):0;
   const tf=TRANSFORMS[c.type],tall=tf&&tf.inputs.length===4;
-  const bl=BLOCK_TYPES.has(c.type)||c.type==='XF'||c.type==='MWF'||sync,top=sync?Math.abs(left[0].y)+.8:(c.type==='SV'||c.type==='SI'||(c.type==='SW'&&c.p.mode==='ext'))?2.35:bl?1.7:1.05,rgt=sync?Math.max(Math.abs(left[0].y),Math.abs(left[left.length-1].y))+.8:tall?2.7:bl?1.7:1.2,v=((c.rot%2)===1);cx.fillStyle=col;cx.font='500 '+Math.max(10,12*view.s)+'px '+css('--ui');
-  if(!v){cx.textAlign='center';cx.textBaseline='alphabetic';cx.fillText(c.name,px,py-top*u);cx.fillStyle=css('--muted');cx.font=Math.max(9,11*view.s)+'px '+css('--mono');if(showVals)cx.fillText(compLabel(c),px,py+(sync?left[left.length-1].y+.5:tall?2.5:tf?1.5:c.type==='SW'&&c.p.body?1.55:bl?1.45:1.2)*u+8*view.s)}
+  const bl=BLOCK_TYPES.has(c.type)||c.type==='XF'||c.type==='MWF'||sync,top=sync?Math.abs(left[0].y)+.8:sum?-sumInputY(sn,0)+.7:(c.type==='SV'||c.type==='SI'||(c.type==='SW'&&c.p.mode==='ext'))?2.35:bl?1.7:1.05,rgt=sync?Math.max(Math.abs(left[0].y),Math.abs(left[left.length-1].y))+.8:sum?Math.max(Math.abs(sumInputY(sn,0)),Math.abs(sumInputY(sn,sn-1)))+.7:tall?2.7:bl?1.7:1.2,v=((c.rot%2)===1);cx.fillStyle=col;cx.font='500 '+Math.max(10,12*view.s)+'px '+css('--ui');
+  if(!v){cx.textAlign='center';cx.textBaseline='alphabetic';cx.fillText(c.name,px,py-top*u);cx.fillStyle=css('--muted');cx.font=Math.max(9,11*view.s)+'px '+css('--mono');if(showVals)cx.fillText(compLabel(c),px,py+(sync?left[left.length-1].y+.5:sum?sumInputY(sn,sn-1)+.5:tall?2.5:tf?1.5:c.type==='SW'&&c.p.body?1.55:bl?1.45:1.2)*u+8*view.s)}
   else{cx.textAlign='left';cx.textBaseline='alphabetic';cx.fillText(c.name,px+rgt*u,py-.1*u);cx.fillStyle=css('--muted');cx.font=Math.max(9,11*view.s)+'px '+css('--mono');if(showVals)cx.fillText(compLabel(c),px+rgt*u,py+.6*u)}
   if(probed){cx.fillStyle=css('--accent');cx.beginPath();cx.arc(px+(v?-.0:0),py+(v?0:0)-(v?0:0),0,0,1);cx.fill()}
 }
@@ -1158,7 +1170,7 @@ cv.addEventListener('pointerdown',e=>{cv.focus();cv.setPointerCapture(e.pointerI
     draw()}
   else if(tool==='wire'){
     if(!wireStart)wireStart={x:gx,y:gy};
-    else{if(wireStart.x===gx&&wireStart.y===gy){wireStart=null}else{snap();for(const s of wirePreview(wireStart,{x:gx,y:gy},wireFlip))circuit.wires.push({x1:s[0],y1:s[1],x2:s[2],y2:s[3]});wireStart={x:gx,y:gy};persist()}}
+    else{if(wireStart.x===gx&&wireStart.y===gy){wireStart=null}else{snap();for(const s of wirePreview(wireStart,{x:gx,y:gy},wireFlip))circuit.wires.push({x1:s[0],y1:s[1],x2:s[2],y2:s[3]});wireStart={x:gx,y:gy};persist();renderInsp()}}
     draw()}
   else{snap();const c={id:idc++,type:tool,x:gx,y:gy,rot:ghostRot,p:Object.assign({},DEFAULTS[tool]),name:nextName(circuit.comps,tool)};circuit.comps.push(c);sel={kind:'c',id:c.id};persist();renderInsp();draw()}});
 cv.addEventListener('pointermove',e=>{const[px,py]=evPos(e);mouse={x:px,y:py,in:true};
@@ -1169,12 +1181,12 @@ cv.addEventListener('pointermove',e=>{const[px,py]=evPos(e);mouse={x:px,y:py,in:
       if(a.x1===a.x2&&a.y1===a.y2){a.x1=o.x1;a.y1=o.y1;a.x2=o.x2;a.y2=o.y2}else drag.moved=true}
     else{const[wx,wy]=toW(px,py),gx=Math.round(wx),gy=Math.round(wy);const nx=drag.ox+gx-drag.sx,ny=drag.oy+gy-drag.sy;if(nx!==drag.c.x||ny!==drag.c.y){drag.c.x=nx;drag.c.y=ny;drag.moved=true;rewire(drag)}}}
   draw()});
-cv.addEventListener('pointerup',()=>{if(drag&&(drag.type==='move'||drag.type==='arrow'||drag.type==='wire')){if(!drag.moved)undoStack.pop();else persist()}drag=null});
+cv.addEventListener('pointerup',()=>{if(drag&&(drag.type==='move'||drag.type==='arrow'||drag.type==='wire')){if(!drag.moved)undoStack.pop();else{persist();renderInsp()}}drag=null});
 cv.addEventListener('pointerleave',()=>{mouse.in=false;draw()});
 cv.addEventListener('dblclick',()=>{if(tool==='wire'){wireStart=null;draw()}});
 cv.addEventListener('contextmenu',e=>e.preventDefault());
 cv.addEventListener('wheel',e=>{e.preventDefault();const[px,py]=evPos(e),[wx,wy]=toW(px,py),f=Math.exp(-e.deltaY*.0015),s=Math.max(.1,Math.min(2.6,view.s*f));view.s=s;view.ox=px-wx*G*s;view.oy=py-wy*G*s;draw()},{passive:false});
-function rotateSel(){if(sel&&sel.kind==='a'){snap();const a=circuit.arrows[sel.i];const dx=a.x2-a.x1,dy=a.y2-a.y1;a.x2=a.x1-dy;a.y2=a.y1+dx;persist();draw()}else if(tool==='arrow'){}else if(sel&&sel.kind==='c'){snap();const c=circuit.comps.find(c=>c.id===sel.id);c.rot=(c.rot+1)%4;persist();draw()}else if(tool==='wire'){wireFlip=!wireFlip;draw()}else{ghostRot=(ghostRot+1)%4;draw()}}
+function rotateSel(){if(sel&&sel.kind==='a'){snap();const a=circuit.arrows[sel.i];const dx=a.x2-a.x1,dy=a.y2-a.y1;a.x2=a.x1-dy;a.y2=a.y1+dx;persist();draw()}else if(tool==='arrow'){}else if(sel&&sel.kind==='c'){snap();const c=circuit.comps.find(c=>c.id===sel.id);c.rot=(c.rot+1)%4;persist();renderInsp();draw()}else if(tool==='wire'){wireFlip=!wireFlip;draw()}else{ghostRot=(ghostRot+1)%4;draw()}}
 function deleteSel(){if(!sel)return;snap();if(sel.kind==='c'){circuit.comps=circuit.comps.filter(c=>c.id!==sel.id);probes=probes.filter(p=>p.comp!==sel.id)}else if(sel.kind==='a')circuit.arrows.splice(sel.i,1);else circuit.wires.splice(sel.i,1);sel=null;changed()}
 cv.addEventListener('keydown',e=>{
   if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();deleteSel()}
@@ -1211,6 +1223,7 @@ function renderInsp(){const box=$('insp');box.innerHTML='';
   if(['MSPEED','MTORQUE','MPOS'].includes(c.type))box.append(el('div',{class:'note'},'Sélectionnez le moteur. La sortie de commande utilise la valeur du pas précédent : vitesse en rad/s, couple en N·m ou position non limitée en rad.'));
   if(c.type==='TRI')box.append(el('div',{class:'note'},'Le rapport cyclique indique la fraction de période consacrée à la montée : 0 = rampe descendante, 0,5 = triangle symétrique, 1 = rampe montante. Pour une pente très courte, réduisez le pas de simulation si nécessaire.'));
   if(c.type==='GAIN')box.append(el('div',{class:'note'},'Sortie = gain × entrée ; si les limites sont activées, la sortie est bornée entre les valeurs minimale et maximale.'));
+  if(c.type==='SUM')box.append(el('div',{class:'note'},'La sortie est la somme des entrées multipliées par leurs coefficients. Débranchez toutes les bornes, y compris la sortie, avant de changer le nombre d’entrées.'));
   if(c.type==='PI')box.append(el('div',{class:'note'},'PID : action dérivée filtrée sur l’entrée (Kd · p / (1 + τd · p)), calculée par Euler implicite. Kd = 0 désactive la dérivée et conserve le PI. La dérivée et l’entrée précédente sont initialisées à zéro : une consigne brusque peut provoquer une pointe. Réduisez le pas devant τd. Si les limites sont activées, la sortie est bornée et l’intégrateur ajusté en saturation (anti-emballement). Pour un gain limité sans mémoire, utilisez le bloc Gain.'));
   if(c.type==='TF')box.append(el('div',{class:'note'},'Coefficients par puissances décroissantes de p, séparés par des espaces ou des points-virgules. Exemple : 1 / (0,2p + 1) → numérateur « 1 », dénominateur « 0,2 1 ». Ordre maximal 6 ; fonction propre uniquement. États initiaux nuls. Discrétisation Euler implicite : la sortie dynamique utilise l’état au début du pas, puis l’état est mis à jour avec l’entrée du pas. Les boucles passant par un terme direct restent algébriques. Réduisez le pas pour améliorer la précision.'));
   if(c.type==='TRIGSIN'||c.type==='TRIGCOS')box.append(el('div',{class:'note'},'Entrée : angle en radians. Sortie : '+(c.type==='TRIGSIN'?'sinus':'cosinus')+' de cet angle.'));
@@ -1218,7 +1231,7 @@ function renderInsp(){const box=$('insp');box.innerHTML='';
     (c.type==='CLARKE'?'α = (2a − b − c)/3 ; β = (b − c)/√3 ; 0 = (a + b + c)/3.':
     c.type==='ICLARKE'?'a = α + 0 ; b = −α/2 + √3β/2 + 0 ; c = −α/2 − √3β/2 + 0.':
     'Angle électrique θ en radians : θ = p × position mécanique, p étant le nombre de paires de pôles. Convention : d = α cos θ + β sin θ ; q = −α sin θ + β cos θ. La composante homopolaire 0 est transmise inchangée.')));
-  for(const f of(SCHEMA[c.type]||[])){if(f.m&&!([].concat(f.m)).includes(c.p.mode))continue;const id='f-'+f.k;let inp;
+  for(const f of(SCHEMA[c.type]||[])){if(f.m&&!([].concat(f.m)).includes(c.p.mode)||f.sumIndex&&f.sumIndex>sumInputCount(c.p))continue;const id='f-'+f.k;let inp;
     if(f.t==='sel'){inp=el('select',{id});for(const[v,l] of f.o){const o=el('option',{value:v},l);if(c.p[f.k]===v)o.selected=true;inp.append(o)}inp.onchange=()=>{snap();c.p[f.k]=inp.value;changed()}}
     else if(f.t==='phases'||f.t==='connection'){
       const update=value=>{if(machineWired(c)){setStatus('Débranchez toutes les bornes avant de modifier le nombre de phases ou le couplage.','err');renderInsp();return}
@@ -1227,6 +1240,8 @@ function renderInsp(){const box=$('insp');box.innerHTML='';
       else{inp=el('span',{id,role:'radiogroup','aria-label':'Couplage stator',style:'display:flex;gap:8px'});
         for(const [v,label] of [['star','Étoile'],['delta','Triangle']]){const radio=el('input',{type:'radio',name:'motor-connection',value:v,'aria-label':label});radio.checked=c.p.connection===v;radio.onchange=()=>{if(radio.checked)update(v)};inp.append(el('label',{},radio,document.createTextNode(label)))}}
     }
+    else if(f.t==='suminputs'){inp=el('select',{id});for(let i=2;i<=12;i++){const o=el('option',{value:String(i)},String(i));o.selected=c.p.inputs===i;inp.append(o)}
+      inp.disabled=machineWired(c);inp.onchange=()=>{if(machineWired(c)){setStatus('Débranchez toutes les bornes du sommateur avant de modifier le nombre d’entrées.','err');renderInsp();return}snap();c.p.inputs=Number(inp.value);changed()}}
     else if(f.t==='motor'||f.t==='mechanical'||f.t==='load'){const allowed=q=>f.t==='load'?q.type==='MLOAD':(f.t==='mechanical'||c.type==='MSPEED'||c.type==='MPOS'?MECH_TYPES:MOTOR_TYPES).has(q.type);inp=el('select',{id});inp.append(el('option',{value:'0'},f.t==='load'?'Aucune':'Choisir…'));for(const m of circuit.comps.filter(allowed)){const o=el('option',{value:String(m.id)},m.name+' (#'+m.id+')');o.selected=c.p[f.k]===m.id;inp.append(o)}if(c.p[f.k]&&!circuit.comps.some(q=>q.id===c.p[f.k]&&allowed(q)))inp.append(el('option',{value:String(c.p[f.k]),selected:true},'Élément introuvable'));inp.value=String(c.p[f.k]);inp.onchange=()=>{snap();c.p[f.k]=Number(inp.value);changed()}}
     else if(f.t==='chk'){inp=el('input',{type:'checkbox',id});inp.checked=!!c.p[f.k];inp.onchange=()=>{snap();c.p[f.k]=inp.checked?1:0;changed()}}
     else if(f.t==='triduty'){inp=el('input',{type:'text',id,value:fmtSI(c.p[f.k]),inputmode:'decimal'});inp.onchange=()=>{const v=parseSI(inp.value);if(!Number.isFinite(v)||v<0||v>1){inp.value=fmtSI(c.p[f.k]);setStatus('Le rapport cyclique doit être compris entre 0 et 1.','err');return}snap();c.p[f.k]=v;changed()}}
@@ -1514,6 +1529,7 @@ function readCircuit(o){
   const num=v=>Number.isFinite(+v)&&v!==null&&v!=='',comps=[];
   for(const c of o.circuit.comps){
     if(!c||!(c.type in DEFAULTS||c.type==='gnd')||!num(c.x)||!num(c.y))return{err:'Fichier invalide : composant inconnu ou position manquante.'};
+    if(c.type==='SUM'&&c.p&&c.p.inputs!==undefined&&(!num(c.p.inputs)||!Number.isInteger(+c.p.inputs)||+c.p.inputs<2||+c.p.inputs>12))return{err:'Fichier invalide : le nombre d’entrées du sommateur doit être compris entre 2 et 12.'};
     const def=DEFAULTS[c.type]||{},p={};for(const k of Object.keys(def)){const v=c.p&&c.p[k];p[k]=typeof def[k]==='number'?(num(v)?+v:def[k]):(typeof v==='string'?v:def[k])}
     if(c.type==='MWF'&&(!c.p||c.p.layout===undefined))p.layout=0;
     comps.push({id:Math.round(+c.id)||0,type:c.type,x:Math.round(+c.x),y:Math.round(+c.y),rot:((Math.round(+c.rot)||0)%4+4)%4,p,name:String(c.name||'').slice(0,24),ann:cleanAnn(c.ann)})}
